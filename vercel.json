@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "functions": {
+    "api/generatePDF.js": {
+      "maxDuration": 60
+    },
+    "api/generatePDFAllEnroll.js": {
+      "maxDuration": 60
+    }
+  },
+  "routes": [
+    {
+      "src": "/generatePDF",
+      "dest": "/api/generatePDF.js"
+    },
+    {
+      "src": "/generatePDFAllEnroll",
+      "dest": "/api/generatePDFAllEnroll.js"
+    }
+  ],
+  "build": {
+    "env": {
+      "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": "true"
+    }
+  }
+}
