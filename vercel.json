@@ -6,6 +6,15 @@
     },
     "api/generatePDFAllEnroll.js": {
       "maxDuration": 60
+    },
+    "api/generateLOA.js": {
+      "maxDuration": 60
+    },
+    "api/generatePDFAcceptRoadmap.js": {
+      "maxDuration": 60
+    },
+    "api/generatePDFAllCompletion.js": {
+      "maxDuration": 60
     }
   },
   "routes": [
@@ -16,6 +25,18 @@
     {
       "src": "/generatePDFAllEnroll",
       "dest": "/api/generatePDFAllEnroll.js"
+    },
+    {
+      "src": "/generateLOA",
+      "dest": "/api/generateLOA.js"
+    },
+    {
+      "src": "/generatePDFAcceptRoadmap",
+      "dest": "/api/generatePDFAcceptRoadmap.js"
+    },
+    {
+      "src": "/generatePDFAllCompletion",
+      "dest": "/api/generatePDFAllCompletion.js"
     }
   ],
   "build": {

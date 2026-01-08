@@ -314,13 +314,13 @@ module.exports = async (req, res) => {
         Montreal: "6540 Chemin de la Côte-de-Liesse Saint-Laurent, QC H4T 1E3",
         Calgary: "518 9 Ave SE, Calgary, AB T2G 0S1"
       };
-      return location_mapper[location] || null;
+      return location_mapper[location] || location_mapper["Mississauga"];
     };
 
 
     const mapCourse = (courseID) => {
       const course_mapper = {
-            AFK: "Assessment of Fundemental Knowledge Course",
+            AFK: "Assessment of Fundamental Knowledge Course",
             ACJ: "Assessment of Clinical Judgment Course",
             ADT: "Advanced Dental Admission Test Course",
             INBDE: "Integrated National Board Dental Examination Course",
@@ -402,8 +402,8 @@ module.exports = async (req, res) => {
               let endDate, startDate;
 
               try {
-                endDate = formatDateToLongDate(props.course_end_date, { timeZone: 'America/Toronto' });
-                startDate = formatDateToLongDate(props.course_start_date, { timeZone: 'America/Toronto' });
+                endDate = formatDateToLongDate(props.course_end_date, { timeZone: 'UTC' });
+                startDate = formatDateToLongDate(props.course_start_date, { timeZone: 'UTC' });
               } catch (err) {
                 console.warn(`Skipping course ${courseID} - invalid date format:`, err.message);
                 return null; // Return null to filter out later
@@ -416,10 +416,13 @@ module.exports = async (req, res) => {
               }
 
               const serviceLocation = findLocation(props.location);
+              let courseIdentifier = fullCourseName.toLowerCase();
+              let isSitPrac = courseIdentifier.includes("situational practice");
+              const duration = isSitPrac == false ? `${startDate} to ${endDate}` : "12 Weeks" 
 
               const course = {
                 courseID: fullCourseName,
-                duration: `${startDate} to ${endDate}`,
+                duration: duration,
                 location: serviceLocation,
                 createDate: props.createdate ? new Date(props.createdate) : new Date(0),
                 hubspotId: courseID
@@ -519,7 +522,7 @@ module.exports = async (req, res) => {
             .signature-container { display: flex; flex-direction: column; gap: 0.5rem; }
             .signature-image { height: 100px; width: 100px; }
             .signature-name { font-weight: 500; }
-            footer { background-color: #45D3B9; color: #01386E; padding: 0.75rem 2rem; margin-top: 5px; }
+            footer { background-color: #45D3B9; color: #01386E; padding: 0.75rem 2rem; position: fixed; bottom: 0; left: 0; right: 0; width: 100%; }
             footer address { font-style: normal; }
             footer p { font-size: 0.75rem; font-weight: 700; margin: 0.25rem 0; }
             strong { font-weight: 600; }

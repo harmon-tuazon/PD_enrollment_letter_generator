@@ -304,7 +304,7 @@ module.exports = async (req, res) => {
         Montreal: "6540 Chemin de la Côte-de-Liesse Saint-Laurent, QC H4T 1E3",
         Calgary: "518 9 Ave SE, Calgary, AB T2G 0S1"
       };
-      return location_mapper[location] || location_mapper["Mississauga"];
+      return location_mapper[location] ||  location_mapper["Mississauga"];
     };
 
     const serviceLocation = findLocation(data.location);
@@ -397,7 +397,7 @@ module.exports = async (req, res) => {
                 <h1>Subject: Letter of Enrollment</h1>
               </section>
               <section class="main-content">
-                <p>Please be informed that <strong>Dr.${contactName}</strong> is currently enrolled as a full-time student in the following Prep Doctors' courses, as illustrated below, which take place in Prep Doctors' ${data.location} facility, located at:</p>
+                <p>Please be informed that <strong>Dr.${contactName}</strong> was enrolled as a full-time student in the following Prep Doctors' courses, as illustrated below, which take place in Prep Doctors' ${data.location} facility, located at:</p>
                 <address class="facility-address">${serviceLocation}</address>
                 <div class="courses-section">
                   <h2>Courses:</h2>
@@ -407,7 +407,7 @@ module.exports = async (req, res) => {
               <section class="signature-section">
                 <p>Sincerely,</p>
                 <div class="signature-container">
-                  <img src="https://46814382.fs1.hubspotusercontent-na1.net/hubfs/46814382/Enrollment%20Letter/Dipty%20Signature.jpg" alt="Rafik Khalaf Signature" class="signature-image">
+                  <img src="https://46814382.fs1.hubspotusercontent-na1.net/hubfs/46814382/Enrollment%20Letter/Dipty%20Signature.jpg" alt="Signature" class="signature-image">
                   <div>
                     <p class="signature-name">Dipty Missra</p>
                     <p>Client Relations Manager</p>
@@ -434,7 +434,7 @@ module.exports = async (req, res) => {
 
     // Upload to HubSpot - Use Buffer directly instead of Readable stream
     const folderID = "194140833109";
-    const fileName = `Letter_of_Enrollment_${data.student_id}_${data.enrollment_record_id}.pdf`;
+    const fileName = `Letter_of_Completion_${data.student_id}_${data.enrollment_record_id}.pdf`;
 
     // Ensure pdfBuffer is a proper Buffer
     const pdfBufferCorrect = Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer);
@@ -464,7 +464,7 @@ module.exports = async (req, res) => {
     const hubspotClient = new Client({ accessToken: HUBSPOT_TOKEN });
 
     const note_properties = {
-      hs_note_body: `Letter of Enrollment attached: <a href="${fileUrl}" target="_blank">View PDF</a>`,
+      hs_note_body: `Letter of Completion attached: <a href="${fileUrl}" target="_blank">View PDF</a>`,
       hs_timestamp: uploadRes.data.createdAt,
       hs_attachment_ids: uploadRes.data.id
     };

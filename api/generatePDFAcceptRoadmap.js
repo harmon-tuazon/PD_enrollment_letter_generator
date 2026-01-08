@@ -265,34 +265,44 @@ module.exports = async (req, res) => {
     const date = new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
 
     // Validate required fields
-    const requiredFields = ['firstname', 'lastname', 'recordID', 'student_id', 'location', 'course_id', 'enrollment_record_id'];
+    const requiredFields = ['firstname', 'lastname', 'recordID', 'student_id'];
     const missingFields = requiredFields.filter(field => !data[field]);
 
-    const contactName = `${data.firstname} ${data.lastname}`
-
-    function formatEpochMsToLongDate(ms, { timeZone = 'UTC' } = {}) {
-          const d = new Date(Number(ms));
-          if (Number.isNaN(d.getTime())) throw new Error('Invalid epoch milliseconds');
-          return new Intl.DateTimeFormat('en-US', {
-            month: 'long',
-            day: '2-digit',   // ensures "DD" like 05
-            year: 'numeric',
-            timeZone
-          }).format(d);
-    }
-
-    const start = formatEpochMsToLongDate(data.course_start_date, { timeZone: 'UTC' });
-    const end = formatEpochMsToLongDate(data.course_end_date, { timeZone: 'UTC' });
-    let courseIdentifier = String(data.course_id || "").toLowerCase();
-    let isSitPrac = courseIdentifier.includes("sitpractice");
-    const duration = isSitPrac == false ? `${start} to ${end}` : "12 Weeks" 
-
-    if (missingFields.length > 0) {
+     if (missingFields.length > 0) {
       return res.status(400).json({ 
         error: 'Missing required fields',
         missingFields,
         receivedData: data
       });
+    }
+
+    const contactName = `${data.firstname} ${data.lastname}`
+
+    function formatDateToLongDate(dateValue, { timeZone = 'UTC' } = {}) {
+          if (!dateValue) {
+            throw new Error('Date value is empty or null');
+          }
+
+          // Handle ISO date strings like "2022-10-01" or epoch milliseconds
+          let d;
+          if (typeof dateValue === 'string' && dateValue.includes('-')) {
+            // ISO date format
+            d = new Date(dateValue);
+          } else {
+            // Assume epoch milliseconds
+            d = new Date(Number(dateValue));
+          }
+
+          if (isNaN(d.getTime())) {
+            throw new Error(`Invalid date format: ${dateValue}`);
+          }
+
+          return new Intl.DateTimeFormat('en-US', {
+            month: 'long',
+            day: '2-digit',
+            year: 'numeric',
+            timeZone
+          }).format(d);
     }
 
     const findLocation = (location) => {
@@ -304,17 +314,9 @@ module.exports = async (req, res) => {
         Montreal: "6540 Chemin de la Côte-de-Liesse Saint-Laurent, QC H4T 1E3",
         Calgary: "518 9 Ave SE, Calgary, AB T2G 0S1"
       };
-      return location_mapper[location] || location_mapper["Mississauga"];
+      return location_mapper[location] ||  location_mapper["Mississauga"];
     };
 
-    const serviceLocation = findLocation(data.location);
-    if (!serviceLocation) {
-      return res.status(400).json({ 
-        error: 'Invalid location',
-        location: data.location,
-        validLocations: ['Mississauga', 'Vancouver', 'Montreal', 'Calgary', 'Online', 'B9']
-      });
-    }
 
     const mapCourse = (courseID) => {
       const course_mapper = {
@@ -338,12 +340,168 @@ module.exports = async (req, res) => {
           if (lower.includes(key.toLowerCase())) return val;
         }
         return null;
- };
+   };
+
+    const findAssocCourses = async (recordID) => {
+          try { // [A] Top-level guard for the whole function
+
+            // --- Fetch associations ---
+            let response;
+            try { // [B] Catch network/HTTP errors for the first axios call
+              const url = `https://api.hubapi.com/crm/v4/objects/0-1/${recordID}/associations/2-41701559?limit=100`;
+              const headers = {
+                Authorization: `Bearer ${HUBSPOT_TOKEN}`,
+                'Content-Type': 'application/json',
+              };
+              response = await axios.get(url, { headers });
+            } catch (err) {
+              // Add context and bubble up
+              
+              throw new Error(`Failed fetching associations: ${err.response?.status} ${err.message}`);
+            }
+
+            if (!response.data || !response.data.results) {
+              throw new Error('HubSpot API did not return expected association data');
+            }
+
+            const allCourses = response.data.results.map((r) => r.toObjectId);
+            if (allCourses.length === 0) {
+              throw new Error('Trainee has no valid enrollments');
+            }
+
+            console.log(`Found ${allCourses.length} total enrollments for contact ${recordID}`);
+
+        // --- Per-course fetch ---
+          const findCourseProps = async (courseID) => {
+            try { // [C] Catch per-item errors here
+              const properties = ['course_id', 'course_name', 'course_start_date', 'course_end_date', 'location', 'createdate'];
+              const query = `?properties=${encodeURIComponent(properties.join(','))}`;
+              const url = `https://api.hubapi.com/crm/v3/objects/2-41701559/${courseID}${query}`;
+              const headers = {
+                Authorization: `Bearer ${HUBSPOT_TOKEN}`,
+                'Content-Type': 'application/json',
+              };
+
+              const response = await axios.get(url, { headers });
+
+              // Log the response data for debugging
+              console.log(`Course ${courseID} response data:`, JSON.stringify(response.data, null, 2));
+
+              const props = response.data.properties;
+
+              // Skip course if missing critical information
+              if (!props.course_start_date || !props.course_end_date || !props.course_id) {
+                console.warn(`Skipping enrollment ${courseID} - missing required properties:`, {
+                  has_start_date: !!props.course_start_date,
+                  has_end_date: !!props.course_end_date,
+                  has_course_id: !!props.course_id
+                });
+                return null; // Return null to filter out later
+              }
+
+              // Only include specific course types for acceptance roadmap
+              const allowedCoursePatterns = ['Sim-Full', 'SimPack', 'Clinical', 'Situational', 'SitPractice'];
+              const courseIdLower = props.course_id.toLowerCase();
+              const isAllowedCourse = allowedCoursePatterns.some(pattern =>
+                courseIdLower.includes(pattern.toLowerCase())
+              );
+
+              if (!isAllowedCourse) {
+                console.log(`Skipping course ${courseID} - not in allowed patterns:`, props.course_id);
+                return null;
+              }
+
+              let endDate, startDate;
+
+              try {
+                endDate = formatDateToLongDate(props.course_end_date, { timeZone: 'UTC' });
+                startDate = formatDateToLongDate(props.course_start_date, { timeZone: 'UTC' });
+              } catch (err) {
+                console.warn(`Skipping course ${courseID} - invalid date format:`, err.message);
+                return null; // Return null to filter out later
+              }
+
+              const fullCourseName = mapCourse(props.course_id);
+              if (!fullCourseName) {
+                console.warn(`Skipping course ${courseID} - unknown course type:`, props.course_id);
+                return null; // Return null to filter out later
+              }
+
+              const serviceLocation = findLocation(props.location);
+              let courseIdentifier = fullCourseName.toLowerCase();
+              let isSitPrac = courseIdentifier.includes("situational practice");
+              const duration = isSitPrac == false ? `${startDate} to ${endDate}` : "12 Weeks" 
+
+              const course = {
+                courseID: fullCourseName,
+                duration: duration,
+                location: serviceLocation,
+                createDate: props.createdate ? new Date(props.createdate) : new Date(0),
+                hubspotId: courseID
+              };
+
+              return course;
+            } catch (err) {
+              // Option 1 (fail-fast): rethrow so Promise.all rejects
+              throw new Error(`Failed fetching course ${courseID}: ${err.response?.status} ${err.message}`);
+
+              // Option 2 (partial success): return a marker object instead of throwing
+              // return { error: true, courseID, reason: err.message };
+            }
+          };
+
+          // --- Batch the per-course calls ---
+          let results;
+          try { // [D] Catch rejection from Promise.all (from any per-item throw)
+            results = await Promise.all(allCourses.map((course) => findCourseProps(course)));
+            // Filter out null values (skipped courses)
+            results = results.filter(course => course !== null);
+          } catch (err) {
+            // Add context; you can also inspect which ID failed if you include it above
+            throw new Error(`At least one course fetch failed: ${err.message}`);
+          }
+
+          // --- Limit to 8 most recent enrollments ---
+          console.log(`Processing ${results.length} valid enrollments before limiting`);
+
+          // Sort by creation date (most recent first) and limit to 8
+          const limitedResults = results
+            .sort((a, b) => b.createDate.getTime() - a.createDate.getTime())
+            .slice(0, 8);
+
+          console.log(`Limited to ${limitedResults.length} most recent enrollments`);
+
+          if (limitedResults.length > 0) {
+            console.log('Date range of included enrollments:', {
+              newest: limitedResults[0].createDate.toISOString(),
+              oldest: limitedResults[limitedResults.length - 1].createDate.toISOString(),
+              enrollmentIds: limitedResults.map(r => r.hubspotId)
+            });
+          }
+
+          return limitedResults;
+
+        } catch (err) {
+          throw new Error(`findAssocCourses failed: ${err.message}`);
+        }
+  };
+
+  const courses = await findAssocCourses(data.recordID)
+
+  // Validate courses is an array
+  if (!Array.isArray(courses) || courses.length === 0) {
+    return res.status(400).json({
+      error: 'No valid course enrollments found for this student',
+      recordID: data.recordID
+    });
+  }
+
+  const processedCourse = (courses) => {
+      return courses.map(course => `<li><strong>${course.courseID}:</strong> ${course.duration}.</li>`).join("\n");
+  }
+
+  const processedCourseHTML = processedCourse(courses)
     
-    const fullCourseName = mapCourse(data.course_id);
-    console.log("Found course: ", fullCourseName)
-
-
 
     // HTML template with exact original specifications
     const html = `
@@ -355,28 +513,28 @@ module.exports = async (req, res) => {
           <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700&display=swap" rel="stylesheet">
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { font-family: 'Montserrat', sans-serif; font-size: 15px; background-color: white; color: #000; margin: 0; padding: 0; }
+            body { font-family: 'Montserrat', sans-serif; font-size: 13px; background-color: white; color: #000; margin: 0; padding: 0; }
             .watermark { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-image: url('https://46814382.fs1.hubspotusercontent-na1.net/hubfs/46814382/011e001d-e85f-48c9-baf2-1dd37205781c_opengraph-16841b41.png'); background-repeat: no-repeat; background-position: center; background-size: 80vh auto; opacity: 0.2; pointer-events: none; z-index: 1; }
-            .container { max-width: 7.5in; padding: 1rem 0.75in; margin: 0 auto; position: relative; z-index: 10; min-height: calc(100vh - 6rem); }
-            header { margin-bottom: 2rem; }
-            .logo { height: 4rem; margin-bottom: 1rem; }
-            .letter-content { display: flex; flex-direction: column; gap: 1.5rem; }
-            .recipient-date { display: flex; justify-content: space-between; margin-bottom: 2rem; }
-            .subject { margin-bottom: 1.5rem; }
-            .subject h1 { font-size: 16px; font-weight: 500; text-decoration: underline; }
+            .container { max-width: 7.5in; padding: 0.5rem 0.75in; margin: 0 auto; position: relative; z-index: 10; }
+            header { margin-bottom: 1rem; }
+            .logo { height: 3rem; margin-bottom: 0.5rem; }
+            .letter-content { display: flex; flex-direction: column; gap: 1rem; }
+            .recipient-date { display: flex; justify-content: space-between; margin-bottom: 1rem; }
+            .subject { margin-bottom: 1rem; }
+            .subject h1 { font-size: 14px; font-weight: 500; text-decoration: underline; }
             .main-content { display: flex; flex-direction: column; gap: 1rem; }
             .main-content p { line-height: 1.625; }
-            .facility-address { text-align: center; font-weight: 500; margin: 1.5rem 0; }
+            .facility-address { text-align: center; font-weight: 500; margin: 1rem 0; }
             .courses-section { margin: 1rem 0; }
-            .courses-section h2 { font-size: 15px; font-weight: 500; margin-bottom: 1rem; }
+            .courses-section h2 { font-size: 13px; font-weight: 500; margin-bottom: 1rem; }
             .courses-list { margin-left: 1.5rem; }
-            .courses-list li { font-size: 15px; margin-bottom: 0.5rem; }
-            .signature-section { margin-top: 5px; margin-bottom: 2rem; }
+            .courses-list li { font-size: 13px; margin-bottom: 0.5rem; }
+            .signature-section { margin-top: 5px; margin-bottom: 1rem; }
             .signature-section > p { margin-bottom: 0.5rem; }
             .signature-container { display: flex; flex-direction: column; gap: 0.5rem; }
-            .signature-image { height: 130px; width: 130px; }
+            .signature-image { height: 100px; width: 100px; }
             .signature-name { font-weight: 500; }
-            footer { background-color: #45D3B9; color: #01386E; padding: 1rem 2rem; position: fixed; bottom: 0; left: 0; right: 0; width: 100%; }
+            footer { background-color: #45D3B9; color: #01386E; padding: 0.75rem 2rem; position: fixed; bottom: 0; left: 0; right: 0; width: 100%; }
             footer address { font-style: normal; }
             footer p { font-size: 0.75rem; font-weight: 700; margin: 0.25rem 0; }
             strong { font-weight: 600; }
@@ -397,11 +555,11 @@ module.exports = async (req, res) => {
                 <h1>Subject: Letter of Enrollment</h1>
               </section>
               <section class="main-content">
-                <p>Please be informed that <strong>Dr.${contactName}</strong> is currently enrolled as a full-time student in the following Prep Doctors' courses, as illustrated below, which take place in Prep Doctors' ${data.location} facility, located at:</p>
-                <address class="facility-address">${serviceLocation}</address>
+                <p>Please be informed that <strong>Dr.${contactName}</strong> was accepted as a full-time student in the following Prep Doctors' courses, as illustrated below, which take place in Prep Doctors' ${data.location} facility, located at:</p>
+                <address class="facility-address">${courses[0].location}</address>
                 <div class="courses-section">
                   <h2>Courses:</h2>
-                  <ol class="courses-list"><li><strong>${fullCourseName}:</strong> ${duration}</li></ol>
+                  <ol class="courses-list">${processedCourseHTML}</ol>
                 </div>
               </section>
               <section class="signature-section">
@@ -434,7 +592,7 @@ module.exports = async (req, res) => {
 
     // Upload to HubSpot - Use Buffer directly instead of Readable stream
     const folderID = "194140833109";
-    const fileName = `Letter_of_Enrollment_${data.student_id}_${data.enrollment_record_id}.pdf`;
+    const fileName = `Letter_of_Roadmap_Acceptance_${data.student_id}.pdf`;
 
     // Ensure pdfBuffer is a proper Buffer
     const pdfBufferCorrect = Buffer.isBuffer(pdfBuffer) ? pdfBuffer : Buffer.from(pdfBuffer);
@@ -464,7 +622,7 @@ module.exports = async (req, res) => {
     const hubspotClient = new Client({ accessToken: HUBSPOT_TOKEN });
 
     const note_properties = {
-      hs_note_body: `Letter of Enrollment attached: <a href="${fileUrl}" target="_blank">View PDF</a>`,
+      hs_note_body: `Letter of Roadmap Acceptance attached: <a href="${fileUrl}" target="_blank">View PDF</a>`,
       hs_timestamp: uploadRes.data.createdAt,
       hs_attachment_ids: uploadRes.data.id
     };
